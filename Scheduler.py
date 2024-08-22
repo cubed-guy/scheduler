@@ -1,59 +1,92 @@
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-	from typing import Union, Literal
-	from typing_extensions import TypeAlias
+	from typing_extensions import TypeAlias, override
 	nonempty: TypeAlias = list
-
-	class _NOW_TYPE:    ...
-	class _NEVER_TYPE:  ...
-	class _FREE_TYPE:   ...
-
-else:
-	_NOW_TYPE = type('NOW', (), {'__repr__': lambda s: "(now)"})
-	_NEVER_TYPE = type('NEVER', (), {'__repr__': lambda s: "(never)"})
-	_FREE_TYPE = type('FREE', (), {'__repr__': lambda s: "(free)"})
 
 from time import perf_counter
 from abc import ABC, abstractmethod
+from enum import Enum, auto
 from datetime import (
 	datetime as dt,
 	timedelta as td,
 )
 
-NOW = _NOW_TYPE()
-NEVER = _NEVER_TYPE()
-FREE = _FREE_TYPE()
+class DummyTime(Enum):
+	NOW = auto()
+	NEVER = auto()
+
+NOW = DummyTime.NOW
+NEVER = DummyTime.NEVER
 
 class Condition(ABC):
 	@abstractmethod
-	def next_true(self, log: list[ScheduleEntry], qtask: Task) -> Union[dt, _NOW_TYPE, _NEVER_TYPE]:  ...
+	def next_true(self, log: list[ScheduleEntry], qtask: Task) -> dt | DummyTime:  ...
 
 	@abstractmethod
-	def next_false(self, log: list[ScheduleEntry], qtask: Task) -> Union[dt, _NOW_TYPE, _NEVER_TYPE]:  ...
+	def next_false(self, log: list[ScheduleEntry], qtask: Task) -> dt | DummyTime:  ...
 
 class Task:
-	def __init__(self, item, colour, condition: Condition):
+	def __init__(self, item, colour, cond: Condition):
 		self.item = item
 		self.colour = colour
-		self.condition = condition
+		self.cond = cond
 
-ScheduleEntry = tuple[Task, dt, dt]
+	def __repr__(self):
+		return self.item
+
+	def next_true(self, log: list[ScheduleEntry]) -> dt | DummyTime:
+		return self.cond.next_true(log, self)
+
+	def next_false(self, log: list[ScheduleEntry]) -> dt | DummyTime:
+		return self.cond.next_false(log, self)
+
+if TYPE_CHECKING:
+	ScheduleEntry = tuple[Task, dt, dt]
+
+class Never(Condition):
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		return NEVER
+
+	def next_false(self, log, qtask) -> dt | DummyTime:
+		return NOW
+
+FREE = Task('(free)', (0, 0, 0), Never())
+
+class Always(Condition):
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		return NOW
+
+	def next_false(self, log, qtask) -> dt | DummyTime:
+		return NEVER
 
 class Before(Condition):
 	def __init__(self, time: dt):
 		self.time = time
 	
-	def next_true(self, log, qtask):
-		if not log: return NOW
-		return log[-1][2]
-
-	def next_false(self, log, qtask):
-		if not log: return self.time
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		if not log:
+			print(f'  [NTRUE] Next true of before({self.time:%a %d %H:%M})@(empty) -> NOW for {qtask}')
+			return NOW
 
 		if log[-1][2] < self.time:
+			print(f'  [NTRUE] Next true of before({self.time:%a %d %H:%M})@({log[-1][2]:%a %d %H:%M}) -> NOW for {qtask}')
+			return NOW
+		else:
+			print(f'  [NTRUE] Next true of before({self.time:%a %d %H:%M})@({log[-1][2]:%a %d %H:%M}) -> NEVER for {qtask}')
+			return NEVER
+
+	def next_false(self, log, qtask) -> dt | DummyTime:
+		if not log:
+			print(f'  [FALSE] Next false of before({self.time})@(empty) -> {self.time:%a %H:%M} for {qtask}')
+			return self.time
+
+		if log[-1][2] < self.time:
+			print(f'  [FALSE] Next false of before({self.time})@({log[-1][2]:%a %H:%M}) -> {self.time:%a %H:%M} for {qtask}')
 			return self.time
 		else:
+			print(f'  [FALSE] Next false of before({self.time})@({log[-1][2]:%a %H:%M}) -> NEVER for {qtask}')
 			return NEVER
 
 class In(Condition):
@@ -61,31 +94,28 @@ class In(Condition):
 		self.spent = spent
 		self.past = past
 		
-	def find_spent(self, log: nonempty, qtask: Task) -> td:
-		last = log[-1][2]
-		limit = last-self.past
-
-		spent = td(0)
-
-		for task, start, end in reversed(log):
-			if end < limit: break
-
-			if task is not qtask: continue
-
-			if start < limit: start = limit
-			spent += end-start
-
-		return spent
-
-	def next_false(self, log, qtask):
+	def next_false(self, log, qtask) -> dt | DummyTime:
 		if not log: return NOW  # should be (latest + self.spent)
 
 		last = log[-1][2]
-		log_spent = self.find_spent(log, qtask)
-		if log_spent > self.spent: return NOW
-		return self.spent-log_spent
+		limit = last-self.past+self.spent
 
-	def next_true(self, log, qtask):
+		qtime = self.spent
+
+		for task, start, end in reversed(log):
+			if end <= limit: break
+			if task is not qtask: continue
+
+			task_time = end-start
+			if task_time >= qtime: return NOW  # may cause inf loops if not taken are of
+
+			qtime -= task_time
+			limit -= task_time
+
+		print(f'  [FALSE] For {qtask}, Next false of in({self.spent}) -> {last+qtime:%a %d %H:%M}')
+		return last+qtime
+
+	def next_true(self, log, qtask) -> dt | DummyTime:
 		if not log: return NOW
 
 		last = log[-1][2]
@@ -102,8 +132,11 @@ class In(Condition):
 			if task_time < to_spend:
 				to_spend -= task_time
 			else:
-				return end-to_spend
+				print(f'  [NTRUE] Next true of in({self.spent})@({start:%a %d %H:%M} to {end:%a %d %H:%M}) -> {end-to_spend+self.past:%a %H:%M} for {qtask}')
+				return end+to_spend + self.past
 
+		# There is time to spend
+		print(f'  [NTRUE] Next true of in(rem {to_spend} of {self.spent}) -> NOW for {qtask}')
 		return NOW
 
 class Repeat(Condition):
@@ -112,36 +145,54 @@ class Repeat(Condition):
 		self.interval = interval  # start once a day, once a week etc
 		self.duration = duration  # how long after starting
 
-	def next_true(self, log, qtask):
-		if not log: return self.anchor
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		if not log:
+			print(f'  [NTRUE] Next true of repeat({self.anchor:%a %H:%M})@(empty) -> {self.anchor:%a %d %H:%M} for {qtask}')
+			return self.anchor
 
 		last = log[-1][2]
 		diff = last - self.anchor
-		offset = diff % self.interval
+		offset = (-diff) % self.interval
+		print(f'  [NTRUE] repeat({self.anchor:%a %H:%M})@{last:(%a %H:%M)} -> {last+offset:%a %d %H:%M} for {qtask}')
+
 		return last + offset
 
-	def next_false(self, log, qtask):
-		if not log: return self.anchor+self.duration
-
-		if log[-1][0] is qtask:
-			return log[-1][1] + self.duration
+	def next_false(self, log, qtask) -> dt | DummyTime:
+		if not log:
+			last = '(empty)'
+			start = self.anchor
+		elif log[-1][0] is qtask:
+			last = f'{log[-1][1]:%H:%M}'
+			start = log[-1][1]
 		else:
-			return self.next_true(log, qtask) + self.duration
+			last = f'{log[-1][2]:%H:%M}'
+			start = log[-1][2]
+		print(f'  [FALSE] For {qtask}, repeat({self.anchor:%a %H:%M}) on {last} -> {start + self.duration:%a %d %H:%M}')
+		return start + self.duration
 
 class Event(Condition):
 	def __init__(self, start: dt, end: dt):
 		self.start = start
 		self.end = end
 
-	def next_true(self, log, qtask):
-		if not log: return self.start
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		if not log:
+			print(f'  [NTRUE] event({self.start:%a %d %H:%M} to {self.end:%a %d %H:%M})@(empty) -> {self.start:%a %d %H:%M} for {qtask}')
+			return self.start
 
 		last = log[-1][2]
-		if last > self.start: return last
-		elif self.end < last: return NEVER
-		else: return self.start
+		if last < self.start: out = self.start
 
-	def next_false(self, log, qtask):
+		# self.start <= last
+		elif self.end <= last:
+			print(f'  [NTRUE] event({self.start:%a %d %H:%M} to {self.end:%a %d %H:%M})@({last:%a %d %H:%M}) -> NEVER for {qtask}')
+			return NEVER
+		else: out = last
+
+		print(f'  [NTRUE] event({self.start:%a %d %H:%M} to {self.end:%a %d %H:%M})@({last:%a %d %H:%M}) -> {out:%a %d %H:%M} for {qtask}')
+		return out
+
+	def next_false(self, log, qtask) -> dt | DummyTime:
 		if not log: return self.end
 
 		last = log[-1][2]
@@ -152,7 +203,7 @@ class Or(Condition):
 	def __init__(self, *conds):
 		self.conds = conds
 
-	def next_true(self, log, qtask):
+	def next_true(self, log, qtask) -> dt | DummyTime:
 		out = NEVER
 		for cond in self.conds:
 			cond_next = cond.next_true(log, qtask)
@@ -162,7 +213,7 @@ class Or(Condition):
 
 		return out
 
-	def next_false(self, log, qtask):
+	def next_false(self, log, qtask) -> dt | DummyTime:
 		out = NOW
 		for cond in self.conds:
 			cond_next = cond.next_false(log, qtask)
@@ -176,7 +227,7 @@ class And(Condition):
 	def __init__(self, *conds):
 		self.conds = conds
 
-	def next_true(self, log, qtask):
+	def next_true(self, log, qtask) -> dt | DummyTime:
 		out = NOW
 		for cond in self.conds:
 			cond_next = cond.next_true(log, qtask)
@@ -186,7 +237,7 @@ class And(Condition):
 
 		return out
 
-	def next_false(self, log, qtask):
+	def next_false(self, log, qtask) -> dt | DummyTime:
 		out = NEVER
 		for cond in self.conds:
 			cond_next = cond.next_false(log, qtask)
@@ -196,61 +247,122 @@ class And(Condition):
 
 		return out
 
-def compute_schedule_now(tasks: list[Task], log: list[ScheduleEntry], limit: dt) -> list[ScheduleEntry]:
+def compute_schedule(tasks: list[Task], log: list[ScheduleEntry], latest: dt, limit: dt) -> list[ScheduleEntry]:
 	if not tasks: return []
+
+	if not isinstance(tasks[0], Task):
+		raise TypeError(f'Incorrect Task type: 0x{id(type(tasks[0])):012x} expected 0x{id(Task):012x}')
 
 	log = log.copy()  # We will modify this. Don't want the caller to get a modified log
 	l = len(log)
-	latest = dt.now()
 
 	perf_start = perf_counter()
 
-	if not log: latest = add_one_task(tasks, log, latest)
-	while log[-1][2] < limit:
-		latest = add_one_task(tasks, log, latest)
-		if latest is NEVER:
-			task, start, _end = log[-1]
-			log[-1] = (task, start, limit)
-			break
+	while not log or log[-1][2] < limit:
+		res = add_one_task(tasks, log, latest)
+		if isinstance(res, DummyTime):
+			if res is NEVER:
+				task, start, _end = log[-1]
+				log[-1] = (task, start, limit)
+				break
+		else:
+			latest = res
+
+		print(f'->[REACH] {latest:%a %d %H:%M}')
 
 	perf_end = perf_counter()
-	print(f'Scheduling took {perf_end-perf_start:02f}s')
+	print(f'Scheduling took {(perf_end-perf_start)*1e3:.04f}ms')
 
 	return log[l:]
 
-def add_one_task(tasks: nonempty, log, now: dt) -> dt:  # return the new latest time
+def add_one_task(tasks: nonempty[Task], log, now: dt) -> DummyTime | dt:  # return the new latest time
 	best_task = tasks[0]
-	best_next = best_task.next_true()
+	best_next = best_task.next_true(log)
 	best_idx = 0
-	for i, task in enumerate(tasks):
-		task_next = task.next_true(log)
-		if task_next is NEVER: continue
+	print(f'  [BETRS] {best_next} for {best_task}')
 
-		if task_next is NOW:
-			best_task = task
-			best_next = task_next
-			best_idx = i
-			break
+	if best_next is not NOW:
+		for i, task in enumerate(tasks):
+			task_next = task.next_true(log)
+			if task_next is NEVER: continue
 
-		if task_next < best_next:
-			best_task = task
-			best_next = task_next
-			best_idx = i
+			if task_next is NOW or task_next == now:
+				best_task = task
+				best_next = task_next
+				best_idx = i
+				print(f'  [SHRTS] {best_next} for {task}')
+				break
 
-	if best_next is NEVER: return now  # no more tasks
+			elif task_next < best_next:  # type: ignore[operator]
+				best_task = task
+				best_next = task_next
+				best_idx = i
+				print(f'  [BETRS] {best_next} for {task}')
+
+			# else:
+				# print(f'[WORSS] {task_next} for {task}')
+
+	if best_next is NEVER:
+		log.append((FREE, log[-1][2], NEVER))
+		print('  [RET]    NEVER')
+		return NEVER  # no more tasks
 	if best_next is NOW: best_next = now
 
-	log.append((FREE, log[-1][2], best_next))
+	print(f'  [BESTS] {best_next:%a %d %H:%M} from {best_task} ({now = : %a %d %H:%M})')
 
-	best_end = best_task.next_false(log)
+	if log and log[-1][2] < best_next:
+		log.append((FREE, log[-1][2], best_next))
+		print(f'  [GAP]   {log[-1]}')
+
+	print(f'  [COND] ', best_task.cond.__class__.__name__)
+	best_end: dt | DummyTime = best_task.next_false(log)
 	if best_end is not NOW:
+		if best_end is not NEVER:
+			print(f'  [BETRE] {best_end:%a %H:%M} from {best_task}')
+
 		for task in tasks[:best_idx]:
 			task_next = task.next_true(log)
 			if task_next is NEVER: continue
-			if task_next is NOW:
+			if isinstance(task_next, DummyTime):
+				print(f'  [SHTRE] {best_end:%a %H:%M} from {task}')
 				raise RuntimeError('Got a higher priority urgent task that was not assigned')
 
-			if best_end is NEVER or task_next < best_end: best_end = task_next
+			if isinstance(best_end, DummyTime) or task_next < best_end:
+				best_end = task_next
+				print(f'  [BETRE] {best_end:%a %H:%M} from {task}')
+			# else:
+				# print(f'[WORSE] {task_next} for {task}')
+
+		if best_end is NOW:
+			best_end = now
+
+	else:
+		best_end = now
+
+	print(f'  [BESTE] {best_end:%a %H:%M}')
+
+	if best_end <= best_next:
+		raise RuntimeError(f'{best_task} at has nonpositive duration ({best_next:%a %d %H:%M} to {best_end:%a %d %H:%M})')
 
 	log.append((best_task, best_next, best_end))
+	task, start, end = log[-1]
+	print(f'  [TASK]  {start:%a %H:%M} to {end:%a %H:%M} -> {task}')
 	return best_end
+
+def main(now, limit):
+	epoch = dt.utcfromtimestamp(0)  # Thursday
+	# now = dt.now()
+	from temp_data import tasks, shd
+
+	log: list[ScheduleEntry] = [(shd.FREE, now, now)]
+
+	schedule = shd.compute_schedule(tasks, log, now, limit)
+	print(len(schedule), 'tasks')
+	for task, start, end in schedule:
+		# if task is shd.FREE: continue
+		print(f'{start:%a %d %H:%M} to {end:%a %d %H:%M} ({end-start}) -> {task}')
+
+if __name__ == '__main__':
+	now = dt.now()
+	now = now.replace(microsecond=0)
+	main(now, now+td(2))
