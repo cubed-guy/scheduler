@@ -1,19 +1,44 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+	from typing import Union, Literal
+	from typing_extensions import TypeAlias
+	nonempty: TypeAlias = list
+
+	class _NOW_TYPE:    ...
+	class _NEVER_TYPE:  ...
+	class _FREE_TYPE:   ...
+
+else:
+	_NOW_TYPE = type('NOW', (), {'__repr__': lambda s: "(now)"})
+	_NEVER_TYPE = type('NEVER', (), {'__repr__': lambda s: "(never)"})
+	_FREE_TYPE = type('FREE', (), {'__repr__': lambda s: "(free)"})
+
+from time import perf_counter
 from abc import ABC, abstractmethod
 from datetime import (
 	datetime as dt,
 	timedelta as td,
 )
 
-ScheduleEntry = tuple[Task, dt, dt]
-NOW = type('NOW', (), {'__repr__': lambda s: "(now)"})()
-NEVER = type('NEVER', (), {'__repr__': lambda s: "(never)"})()
+NOW = _NOW_TYPE()
+NEVER = _NEVER_TYPE()
+FREE = _FREE_TYPE()
 
 class Condition(ABC):
 	@abstractmethod
-	def next_true(self, log: list[ScheduleEntry], qtask: Task) -> Union[dt, NOW, NEVER]:  ...
+	def next_true(self, log: list[ScheduleEntry], qtask: Task) -> Union[dt, _NOW_TYPE, _NEVER_TYPE]:  ...
 
 	@abstractmethod
-	def next_false(self, log: list[ScheduleEntry], qtask: Task) -> Union[dt, NOW, NEVER]:  ...
+	def next_false(self, log: list[ScheduleEntry], qtask: Task) -> Union[dt, _NOW_TYPE, _NEVER_TYPE]:  ...
+
+class Task:
+	def __init__(self, item, colour, condition: Condition):
+		self.item = item
+		self.colour = colour
+		self.condition = condition
+
+ScheduleEntry = tuple[Task, dt, dt]
 
 class Before(Condition):
 	def __init__(self, time: dt):
@@ -36,7 +61,7 @@ class In(Condition):
 		self.spent = spent
 		self.past = past
 		
-	def find_spent(self, log: 'nonempty', qtask: Task) -> td:
+	def find_spent(self, log: nonempty, qtask: Task) -> td:
 		last = log[-1][2]
 		limit = last-self.past
 
@@ -92,7 +117,7 @@ class Repeat(Condition):
 
 		last = log[-1][2]
 		diff = last - self.anchor
-		offset = diff % interval
+		offset = diff % self.interval
 		return last + offset
 
 	def next_false(self, log, qtask):
@@ -171,29 +196,29 @@ class And(Condition):
 
 		return out
 
-class Task:
-	def __init__(self, item, colour, condition: Condition):
-		self.item = item
-		self.colour = colour
-		self.condition = condition
-
 def compute_schedule_now(tasks: list[Task], log: list[ScheduleEntry], limit: dt) -> list[ScheduleEntry]:
-	if not tasks: return
+	if not tasks: return []
 
 	log = log.copy()  # We will modify this. Don't want the caller to get a modified log
-	latest = dt.latest()
+	l = len(log)
+	latest = dt.now()
 
 	perf_start = perf_counter()
 
 	if not log: latest = add_one_task(tasks, log, latest)
 	while log[-1][2] < limit:
 		latest = add_one_task(tasks, log, latest)
-		if latest is NEVER: log[-1][2] = limit; break
+		if latest is NEVER:
+			task, start, _end = log[-1]
+			log[-1] = (task, start, limit)
+			break
 
 	perf_end = perf_counter()
 	print(f'Scheduling took {perf_end-perf_start:02f}s')
 
-def add_one_task(tasks: 'nonempty', log, now: dt) -> dt:  # return the new latest time
+	return log[l:]
+
+def add_one_task(tasks: nonempty, log, now: dt) -> dt:  # return the new latest time
 	best_task = tasks[0]
 	best_next = best_task.next_true()
 	best_idx = 0
@@ -212,7 +237,7 @@ def add_one_task(tasks: 'nonempty', log, now: dt) -> dt:  # return the new lates
 			best_next = task_next
 			best_idx = i
 
-	if best_next is NEVER: return  # no more tasks
+	if best_next is NEVER: return now  # no more tasks
 	if best_next is NOW: best_next = now
 
 	log.append((FREE, log[-1][2], best_next))
