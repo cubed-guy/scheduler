@@ -89,6 +89,47 @@ class Before(Condition):
 			print(f'  [FALSE] Next false of before({self.time})@({log[-1][2]:%a %H:%M}) -> NEVER for {qtask}')
 			return NEVER
 
+class Total(Condition):
+	def __init__(self, duration: td):  # true if you haven't duration enough duration
+		self.duration = duration
+
+	def find_rem(self, log, qtask) -> td:
+		if not log: return NOW  # should be (latest + self.duration)
+
+		last = log[-1][2]
+
+		qtime = self.duration
+
+		for task, start, end in reversed(log):
+			if task is not qtask: continue
+
+			task_time = end-start
+			if task_time >= qtime: return td(0)  # may cause inf loops if not taken are of
+
+			qtime -= task_time
+
+		return qtime
+
+	def next_false(self, log, qtask) -> dt | DummyTime:
+
+		qtime = self.find_rem(log, qtask)
+
+		print(f'  [FALSE] For {qtask}, Next false of in({self.duration}) -> {last+qtime:%a %d %H:%M}')
+		return last+qtime
+
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		if not log: return NOW
+
+		qtime = self.find_rem(log, qtask)
+
+		if qtime <= td(0):
+			# There is time to spend
+			print(f'  [NTRUE] Next true of in(rem {to_spend} of {self.duration}) -> NOW for {qtask}')
+			return NOW
+		else:
+			print(f'  [NTRUE] Next true of in(rem {to_spend} of {self.duration}) -> NEVER for {qtask}')
+			return NEVER
+
 class In(Condition):
 	def __init__(self, spent: td, past: td):  # true if you haven't spent enough time recently
 		self.spent = spent
@@ -133,7 +174,7 @@ class In(Condition):
 				to_spend -= task_time
 			else:
 				print(f'  [NTRUE] Next true of in({self.spent})@({start:%a %d %H:%M} to {end:%a %d %H:%M}) -> {end-to_spend+self.past:%a %H:%M} for {qtask}')
-				return end+to_spend + self.past
+				return end-to_spend + self.past
 
 		# There is time to spend
 		print(f'  [NTRUE] Next true of in(rem {to_spend} of {self.spent}) -> NOW for {qtask}')
@@ -340,6 +381,10 @@ def add_one_task(tasks: nonempty[Task], log, now: dt) -> DummyTime | dt:  # retu
 		best_end = now
 
 	print(f'  [BESTE] {best_end:%a %H:%M}')
+
+	if TYPE_CHECKING:
+		reveal_type(best_next)
+		reveal_type(best_end)
 
 	if best_end <= best_next:
 		raise RuntimeError(f'{best_task} at has nonpositive duration ({best_next:%a %d %H:%M} to {best_end:%a %d %H:%M})')
