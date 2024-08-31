@@ -53,7 +53,7 @@ class Never(Condition):
 	def next_false(self, log, qtask) -> dt | DummyTime:
 		return NOW
 
-FREE = Task('(free)', (34, 34, 34), Never())
+FREE = Task('(free)', (0, 0, 0), Never())
 
 class Always(Condition):
 	def next_true(self, log, qtask) -> dt | DummyTime:
@@ -301,7 +301,7 @@ class And(Condition):
 
 		return out
 
-def compute_schedule(tasks: list[Task], log: list[ScheduleEntry], latest: dt, limit: dt) -> list[ScheduleEntry]:
+def compute_schedule(tasks: list[Task], log: list[ScheduleEntry], latest: dt, limit: dt, *, report_time = True) -> list[ScheduleEntry]:
 	if not tasks: return []
 
 	if not isinstance(tasks[0], Task):
@@ -325,8 +325,9 @@ def compute_schedule(tasks: list[Task], log: list[ScheduleEntry], latest: dt, li
 		# print(f'->[REACH] {latest:%a %d %H:%M}')
 
 	perf_end = perf_counter()
-	print()
-	print(f'# Automated scheduling took {(perf_end-perf_start)*1e3:.04f}ms')
+	if report_time:
+		print()
+		print(f'# Automated scheduling took {(perf_end-perf_start)*1e3:.04f}ms')
 
 	return log[l:]
 

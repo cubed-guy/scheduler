@@ -3,6 +3,7 @@
 from os import environ
 environ['PYGAME_HIDE_SUPPORT_PROMPT'] = 'true'
 
+from io import StringIO
 from os.path import expanduser
 from enum import Enum, auto
 from temp_data import shd, tasks, now, epoch
@@ -75,7 +76,7 @@ def update_stat(*msg, update = True):
 	rect = (0, h-SH, w, SH+1)
 	display.fill(BLACK, rect)
 
-	tsurf = stat_font.render(' '.join(map(repr, msg)), True, WHITE)
+	tsurf = stat_font.render(' '.join(map(str, msg)), True, WHITE)
 	display.blit(tsurf, (5, h-SH))
 
 	if update: pygame.display.update(rect)
@@ -124,7 +125,7 @@ def update_display():
 
 	# print()
 	# update_stat(f'{x_start:.02f} {y_start:.02f}', f'{x_end:.02f} {y_end:.02f}', update = False)
-	update_stat(curr_task, update = False)
+	update_stat(ongoing_task, f'({selected_task.name!r} selected, priority: {scheduled[0][0]} till {scheduled[0][2]:%H:%M})', update = False)
 	pygame.display.flip()
 
 
@@ -141,12 +142,14 @@ ticks = 0
 y_end = None
 
 # Assume tasks is not empty. Crash otherwise.
-curr_task_id = 0
-curr_task = tasks[curr_task_id]
+selected_task_id = 0
+selected_task = tasks[selected_task_id]
+ongoing_task = shd.FREE
 
-today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-log = [(shd.FREE, today, today)]
-scheduled = shd.compute_schedule(tasks, log, today, today+td(7))
+today = now
+limit = today+td(7)
+log = [(ongoing_task, now, now)]  # TODO: persistence
+scheduled = shd.compute_schedule(tasks, log, today, limit)
 
 resize(res)
 pres = pygame.display.list_modes()[0]
@@ -154,10 +157,26 @@ pres = pygame.display.list_modes()[0]
 clock = pygame.time.Clock()
 running = True
 while running:
+	now = dt.now()
+
 	for event in pygame.event.get():
 		if event.type == KEYDOWN:
 			if   event.key == K_ESCAPE: running = False
 			elif event.key == K_F11: toggle_fullscreen()
+			elif event.key == K_UP:
+				selected_task_id -= 1
+				selected_task_id %= len(tasks)
+				selected_task = tasks[selected_task_id]
+			elif event.key == K_DOWN:
+				selected_task_id += 1
+				selected_task_id %= len(tasks)
+				selected_task = tasks[selected_task_id]
+			elif event.key == K_SPACE:
+				if ongoing_task is shd.FREE:
+					ongoing_task = selected_task
+				else:
+					ongoing_task = shd.FREE
+				log.append((ongoing_task, now, now))
 
 		elif event.type == VIDEORESIZE:
 			resize(event.size, display.get_flags())
@@ -182,7 +201,12 @@ while running:
 			if dragging:
 				...
 
-	now = dt.now()
+	# update the latest log entry
+	log[-1] = (log[-1][0], log[-1][1], now)
+	if scheduled[0][0] is not ongoing_task or scheduled[0][2] < now:
+		print('rescheduling', now)
+		scheduled = shd.compute_schedule(tasks, log, now, limit, report_time = False)
+
 	update_display()
 	frame_time = clock.tick(FPS)
 	# ticks += frame_time
