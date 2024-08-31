@@ -12,6 +12,7 @@ from datetime import (
 	datetime as dt,
 	timedelta as td,
 )
+import logfile  # logfile encoder and decoder
 
 import pygame
 from pygame.locals import *
@@ -146,9 +147,12 @@ selected_task_id = 0
 selected_task = tasks[selected_task_id]
 ongoing_task = shd.FREE
 
+with open('scheduler.log', 'rb') as f:
+	log = logfile.read([shd.FREE]+tasks, f)
+log.append((ongoing_task, now, now))
+
 today = now
 limit = today+td(7)
-log = [(ongoing_task, now, now)]  # TODO: persistence
 scheduled = shd.compute_schedule(tasks, log, today, limit)
 
 resize(res)
@@ -177,6 +181,10 @@ while running:
 				else:
 					ongoing_task = shd.FREE
 				log.append((ongoing_task, now, now))
+			elif event.key == K_s:
+				update_stat('Saving log file...')
+				with open('scheduler.log', 'wb') as f:
+					logfile.write([shd.FREE]+tasks, log, f)
 
 		elif event.type == VIDEORESIZE:
 			resize(event.size, display.get_flags())
@@ -204,7 +212,7 @@ while running:
 	# update the latest log entry
 	log[-1] = (log[-1][0], log[-1][1], now)
 	if scheduled[0][0] is not ongoing_task or scheduled[0][2] < now:
-		print('rescheduling', now)
+		# print('rescheduling', now)
 		scheduled = shd.compute_schedule(tasks, log, now, limit, report_time = False)
 
 	update_display()

@@ -1,3 +1,4 @@
 main_schedule.shd
+*.log
 temp_data.py
 __pycache__/
