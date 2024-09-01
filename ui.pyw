@@ -48,13 +48,13 @@ class RowSize(Enum):
 
 def from_screen_space(pos):
 	global zoom, scroll
-	x = pos[0] * zoom + scroll[0]
+	x = (pos[0] - w//2) * zoom + scroll[0]
 	y = pos[1] - scroll[1]  # no zoom on y
 	return x, y
 
 def to_screen_space(x: td, y: float):
 	global zoom, scroll
-	return (x - scroll[0]) / zoom, y + scroll[1]  # no zoom on y
+	return (x - scroll[0]) / zoom + w//2, y + scroll[1]  # no zoom on y
 
 def from_screen_scale(delta):
 	global zoom
@@ -108,6 +108,9 @@ def update_display():
 
 	drect = display.get_rect()
 
+	record_width = interval/zoom
+	record_start = -scroll[0]/zoom+w//2
+
 	# show timeline
 	for task, start, end in iter_chain(log, scheduled):
 		x_start, y_start = time_to_screen_space(start, interval)
@@ -117,8 +120,8 @@ def update_display():
 		if y_start == y_end:
 			display.fill(task.colour, drect.clip((x_start, y_start, x_end-x_start, ROW_HEIGHT)))
 		else:
-			display.fill(task.colour, drect.clip((x_start, y_start, (interval-scroll[0])/zoom-x_start, ROW_HEIGHT)))
-			display.fill(task.colour, drect.clip((-scroll[0]/zoom, y_end, x_end+scroll[0]/zoom, ROW_HEIGHT)))
+			display.fill(task.colour, drect.clip((x_start, y_start, (record_start+record_width)-x_start, ROW_HEIGHT)))
+			display.fill(task.colour, drect.clip((w//2-scroll[0]/zoom, y_end, x_end-record_start, ROW_HEIGHT)))
 
 	cursor_pos = time_to_screen_space(now, interval)
 	cursor_rect = pygame.Rect(cursor_pos, (1, TOTAL_ROW_HEIGHT))
@@ -127,7 +130,8 @@ def update_display():
 
 	# print()
 	# update_stat(f'{x_start:.02f} {y_start:.02f}', f'{x_end:.02f} {y_end:.02f}', update = False)
-	update_stat(ongoing_task, f'({selected_task.name!r} selected, priority: {scheduled[0][0]} till {scheduled[0][2]:%H:%M})', update = False)
+	# update_stat(f'{record_start, record_width} {selected_task} selected ({scheduled[0][0]} in priority till {scheduled[0][2]:%H:%M})', update = False)
+	update_stat(f'{selected_task} selected ({ongoing_task} ongoing, {scheduled[0][0]} in priority till {scheduled[0][2]:%H:%M})', update = False)
 	pygame.display.flip()
 
 
@@ -137,7 +141,7 @@ w, h = res = (1280, 720)
 row_size = RowSize.day
 
 origin = now.replace(hour=0, minute=0, second=0)
-scroll = [td(0), -TOTAL_ROW_HEIGHT * ((now-origin)//td(1))]
+scroll = [td(0.5), -TOTAL_ROW_HEIGHT * ((now-origin)//td(1))]
 zoom = td(1)/w  # one day in the screen
 dragging = False
 ticks = 0
