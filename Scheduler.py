@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 if TYPE_CHECKING:
 	from typing_extensions import TypeAlias, override
 	nonempty: TypeAlias = list
@@ -13,6 +13,12 @@ from datetime import (
 	timedelta as td,
 )
 
+def Singleton(cls):
+	return cls()
+
+@Singleton
+class DONE: ...
+
 class DummyTime(Enum):
 	NOW = auto()
 	NEVER = auto()
@@ -23,10 +29,10 @@ now = dt.now()
 
 class Condition(ABC):
 	@abstractmethod
-	def next_true(self, log: list[ScheduleEntry], qtask: Task) -> dt | DummyTime:  ...
+	def next_true(self, log: list[LogEntry], qtask: Task) -> dt | DummyTime:  ...
 
 	@abstractmethod
-	def next_false(self, log: list[ScheduleEntry], qtask: Task) -> dt | DummyTime:  ...
+	def next_false(self, log: list[LogEntry], qtask: Task) -> dt | DummyTime:  ...
 
 class Task:
 	def __init__(self, name, colour, cond: Condition):
@@ -37,14 +43,15 @@ class Task:
 	def __repr__(self):
 		return self.name
 
-	def next_true(self, log: list[ScheduleEntry]) -> dt | DummyTime:
+	def next_true(self, log: list[LogEntry]) -> dt | DummyTime:
 		return self.cond.next_true(log, self)
 
-	def next_false(self, log: list[ScheduleEntry]) -> dt | DummyTime:
+	def next_false(self, log: list[LogEntry]) -> dt | DummyTime:
 		return self.cond.next_false(log, self)
 
 if TYPE_CHECKING:
 	ScheduleEntry = tuple[Task, dt, dt]
+	LogEntry = tuple[Task, Union[dt, DONE], dt]
 
 class Never(Condition):
 	def next_true(self, log, qtask) -> dt | DummyTime:
@@ -95,7 +102,7 @@ class Total(Condition):
 		self.duration = duration
 
 	def find_rem(self, log, qtask) -> td:
-		if not log: return NOW  # should be (latest + self.duration)
+		if not log: return td(0)  # should be (latest + self.duration)
 
 		last = log[-1][2]
 
@@ -215,7 +222,7 @@ class Repeat(Condition):
 	def next_false(self, log, qtask) -> dt | DummyTime:
 		if not log:
 			# print(f'  [FALSE] repeat({self.anchor:%a %H:%M}) on (empty) -> {self.anchor+seld.duration:%a %d %H:%M} for {qtask}')
-			return self.anchor+seld.duration
+			return self.anchor+self.duration
 
 		last = log[-1][2]
 		time_till_end = self.rem_next_false(last)
@@ -301,7 +308,16 @@ class And(Condition):
 
 		return out
 
-def compute_schedule(tasks: list[Task], log: list[ScheduleEntry], latest: dt, limit: dt, *, report_time = True) -> list[ScheduleEntry]:
+class DoneOnce(Condition):
+	def next_true(self, log, qtask) -> dt | DummyTime:
+		return NOW
+
+	def next_false(self, log, qtask) -> dt | DummyTime:
+		return NEVER
+
+
+
+def compute_schedule(tasks: list[Task], log: list[LogEntry], latest: dt, limit: dt, *, report_time = True) -> list[ScheduleEntry]:
 	if not tasks: return []
 
 	if not isinstance(tasks[0], Task):
@@ -409,7 +425,7 @@ def add_one_task(tasks: nonempty[Task], log, now: dt) -> DummyTime | dt:  # retu
 	# print(f'  [TASK]  {start:%a %H:%M} to {end:%a %H:%M} -> {task}')
 	return best_end
 
-def main(now, limit, log: list[ScheduleEntry] = None):
+def main(now, limit, log: list[LogEntry] | None = None):
 	epoch = dt.utcfromtimestamp(0)  # Thursday
 	from temp_data import tasks, shd
 

@@ -33,6 +33,7 @@ WHITE = c--1
 
 SH = 30
 FPS = 60
+REFRESH_INTERVAL = td(seconds=1)
 
 ZOOM_FAC = 0.88
 MAX_ZOOM = td(days=30)/1280
@@ -116,8 +117,8 @@ def update_display():
 		if y_start == y_end:
 			display.fill(task.colour, drect.clip((x_start, y_start, x_end-x_start, ROW_HEIGHT)))
 		else:
-			display.fill(task.colour, drect.clip((x_start, y_start, (scroll[0]-interval)/zoom, ROW_HEIGHT)))
-			display.fill(task.colour, drect.clip((-scroll[0]/zoom, y_start, x_end+scroll[0]/zoom, ROW_HEIGHT)))
+			display.fill(task.colour, drect.clip((x_start, y_start, (interval-scroll[0])/zoom-x_start, ROW_HEIGHT)))
+			display.fill(task.colour, drect.clip((-scroll[0]/zoom, y_end, x_end+scroll[0]/zoom, ROW_HEIGHT)))
 
 	cursor_pos = time_to_screen_space(now, interval)
 	cursor_rect = pygame.Rect(cursor_pos, (1, TOTAL_ROW_HEIGHT))
@@ -176,6 +177,7 @@ while running:
 				selected_task_id %= len(tasks)
 				selected_task = tasks[selected_task_id]
 			elif event.key == K_SPACE:
+				log[-1] = *log[-1][:2], now
 				if ongoing_task is shd.FREE:
 					ongoing_task = selected_task
 				else:
@@ -211,7 +213,10 @@ while running:
 
 	# update the latest log entry
 	log[-1] = (log[-1][0], log[-1][1], now)
-	if scheduled[0][0] is not ongoing_task or scheduled[0][2] < now:
+	if (
+		scheduled[0][0] is not ongoing_task and scheduled[0][1]+REFRESH_INTERVAL < now
+		or scheduled[0][2] < now
+	):
 		# print('rescheduling', now)
 		scheduled = shd.compute_schedule(tasks, log, now, limit, report_time = False)
 
