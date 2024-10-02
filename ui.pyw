@@ -118,10 +118,10 @@ def update_display():
 
 		# print(f'{x_start:.02f} {y_start:.02f}', f'{x_end:.02f} {y_end:.02f}', curr_task, scroll, zoom)
 		if y_start == y_end:
-			display.fill(task.colour, drect.clip((x_start, y_start, x_end-x_start, ROW_HEIGHT)))
+			display.fill(task.colour, drect.clip((x_start, y_start, x_end-x_start+1, ROW_HEIGHT)))
 		else:
 			display.fill(task.colour, drect.clip((x_start, y_start, (record_start+record_width)-x_start, ROW_HEIGHT)))
-			display.fill(task.colour, drect.clip((w//2-scroll[0]/zoom, y_end, x_end-record_start, ROW_HEIGHT)))
+			display.fill(task.colour, drect.clip((w//2-scroll[0]/zoom, y_end, x_end-record_start+1, ROW_HEIGHT)))
 
 	cursor_pos = time_to_screen_space(now, interval)
 	cursor_rect = pygame.Rect(cursor_pos, (1, TOTAL_ROW_HEIGHT))
@@ -157,7 +157,7 @@ with open('scheduler.log', 'rb') as f:
 log.append((ongoing_task, now, now))
 
 today = now
-limit = today+td(7)
+limit = today+td(14)
 scheduled = shd.compute_schedule(tasks, log, today, limit)
 
 resize(res)
@@ -165,65 +165,77 @@ pres = pygame.display.list_modes()[0]
 # pygame.key.set_repeat(500, 50)
 clock = pygame.time.Clock()
 running = True
-while running:
-	now = dt.now()
+try:
+	while running:
+		now = dt.now()
 
-	for event in pygame.event.get():
-		if event.type == KEYDOWN:
-			if   event.key == K_ESCAPE: running = False
-			elif event.key == K_F11: toggle_fullscreen()
-			elif event.key == K_UP:
-				selected_task_id -= 1
-				selected_task_id %= len(tasks)
-				selected_task = tasks[selected_task_id]
-			elif event.key == K_DOWN:
-				selected_task_id += 1
-				selected_task_id %= len(tasks)
-				selected_task = tasks[selected_task_id]
-			elif event.key == K_SPACE:
-				log[-1] = *log[-1][:2], now
-				if ongoing_task is shd.FREE:
-					ongoing_task = selected_task
+		for event in pygame.event.get():
+			if event.type == KEYDOWN:
+				if   event.key == K_ESCAPE: running = False
+				elif event.key == K_F11: toggle_fullscreen()
+				elif event.key == K_UP:
+					selected_task_id -= 1
+					selected_task_id %= len(tasks)
+					selected_task = tasks[selected_task_id]
+				elif event.key == K_DOWN:
+					selected_task_id += 1
+					selected_task_id %= len(tasks)
+					selected_task = tasks[selected_task_id]
+				elif event.key == K_SPACE:
+					log[-1] = *log[-1][:2], now
+					if ongoing_task is shd.FREE:
+						ongoing_task = selected_task
+					else:
+						ongoing_task = shd.FREE
+					log.append((ongoing_task, now, now))
+				elif event.key == K_s:
+					update_stat('Saving log file...')
+					with open('scheduler.log', 'r+b') as f:
+						logfile.write([shd.FREE]+tasks, log, f)
+				elif event.key == K_p:
+					for task in tasks:
+						nt = task.next_true(log)
+						if nt is shd.NEVER: continue
+						if nt is shd.NOW or nt <= now:
+							print(f'#{int.from_bytes(task.colour, "big"):06x} {task}')
+					print()
+
+			elif event.type == VIDEORESIZE:
+				resize(event.size, display.get_flags())
+			elif event.type == QUIT: running = False
+			elif event.type == MOUSEWHEEL:
+				mods = pygame.key.get_mods()
+				if mods & (KMOD_LCTRL|KMOD_RCTRL):
+					# Zooms wrt object-space origin
+					zoom *= ZOOM_FAC ** event.y
+					zoom = min(max(zoom, MIN_ZOOM), MAX_ZOOM)
 				else:
-					ongoing_task = shd.FREE
-				log.append((ongoing_task, now, now))
-			elif event.key == K_s:
-				update_stat('Saving log file...')
-				with open('scheduler.log', 'wb') as f:
-					logfile.write([shd.FREE]+tasks, log, f)
+					dx, dy = from_screen_scale((event.x * 7, event.y * 7))
+					scroll[0] += dx
+					scroll[1] += dy
+			elif event.type == MOUSEBUTTONDOWN:
+				if event.button == 1:
+					dragging = True
+			elif event.type == MOUSEBUTTONUP:
+				if event.button == 1:
+					dragging = False
+			elif event.type == MOUSEMOTION:
+				if dragging:
+					...
 
-		elif event.type == VIDEORESIZE:
-			resize(event.size, display.get_flags())
-		elif event.type == QUIT: running = False
-		elif event.type == MOUSEWHEEL:
-			mods = pygame.key.get_mods()
-			if mods & (KMOD_LCTRL|KMOD_RCTRL):
-				# Zooms wrt object-space origin
-				zoom *= ZOOM_FAC ** event.y
-				zoom = min(max(zoom, MIN_ZOOM), MAX_ZOOM)
-			else:
-				dx, dy = from_screen_scale((event.x * 7, event.y * 7))
-				scroll[0] += dx
-				scroll[1] += dy
-		elif event.type == MOUSEBUTTONDOWN:
-			if event.button == 1:
-				dragging = True
-		elif event.type == MOUSEBUTTONUP:
-			if event.button == 1:
-				dragging = False
-		elif event.type == MOUSEMOTION:
-			if dragging:
-				...
+		# update the latest log entry
+		log[-1] = (log[-1][0], log[-1][1], now)
+		if (
+			scheduled[0][0] is not ongoing_task and scheduled[0][1]+REFRESH_INTERVAL < now
+			or scheduled[0][2] < now
+		):
+			# print('rescheduling', now)
+			scheduled = shd.compute_schedule(tasks, log, now, limit, report_time = False)
 
-	# update the latest log entry
-	log[-1] = (log[-1][0], log[-1][1], now)
-	if (
-		scheduled[0][0] is not ongoing_task and scheduled[0][1]+REFRESH_INTERVAL < now
-		or scheduled[0][2] < now
-	):
-		# print('rescheduling', now)
-		scheduled = shd.compute_schedule(tasks, log, now, limit, report_time = False)
-
-	update_display()
-	frame_time = clock.tick(FPS)
-	# ticks += frame_time
+		update_display()
+		frame_time = clock.tick(FPS)
+		# ticks += frame_time
+finally:
+	update_stat('Saving log file...')
+	with open('scheduler.log', 'r+b') as f:
+		logfile.write([shd.FREE]+tasks, log, f)

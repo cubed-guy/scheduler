@@ -1,4 +1,5 @@
 from datetime import datetime as dt
+from Scheduler import Task, Never
 import struct
 
 # taskid != taskidx
@@ -13,7 +14,10 @@ taskidx_size  = struct.calcsize(taskidx_fmt)
 tasklen_size  = struct.calcsize(tasklen_fmt)
 logentry_size = struct.calcsize(logentry_fmt)
 
-def read(tasks, file: 'binary'):
+def dummy_task(name, colour):
+	return Task(name, colour, Never())
+
+def read(tasks, file: 'binary', default_colour=(27, 27, 27)):
 	task_map = {}  # using name as the unique identifier
 	for task in tasks:
 		if task.name in task_map:
@@ -21,7 +25,7 @@ def read(tasks, file: 'binary'):
 
 		task_map[task.name] = task
 
-	ntasks, = struct.unpack(taskidx_fmt, file.read(taskidx_size))
+	[ntasks] = struct.unpack(taskidx_fmt, file.read(taskidx_size))
 
 	tasklens = [
 		struct.unpack(tasklen_fmt, file.read(tasklen_size))[0]
@@ -31,10 +35,14 @@ def read(tasks, file: 'binary'):
 	tasks = []
 	for l in tasklens:
 		taskid = file.read(l).decode()
-		if taskid not in task_map:
-			raise ValueError(f'{taskid!r} is not a defined task')
+		if taskid in task_map:
+			task = task_map[taskid]
+		else:
+			task = dummy_task(taskid, default_colour)
+			task_map[taskid] = task
+			# raise ValueError(f'{taskid!r} is not a defined task')
 
-		tasks.append(task_map[taskid])
+		tasks.append(task)
 
 	log = []
 
@@ -49,7 +57,7 @@ def read(tasks, file: 'binary'):
 
 	return log
 
-def write(tasks, log, file: 'binary'):  # TODO: restore old file if fail
+def write(tasks, log, file: 'binary'):
 	task_map = {}  # using name as the unique identifier
 	for i, task in enumerate(tasks):
 		if task.name in task_map:
@@ -57,25 +65,39 @@ def write(tasks, log, file: 'binary'):  # TODO: restore old file if fail
 
 		task_map[task.name] = i
 
-	file.write(struct.pack(taskidx_fmt, len(tasks)))
+	# file must be read-write
+	log_backup = file.read()
 
-	encoded_names = [task.name.encode() for task in tasks]
+	try:
+		file.seek(0)
+		file.write(struct.pack(taskidx_fmt, len(tasks)))
 
-	for enc_name in encoded_names:
-		file.write(struct.pack(tasklen_fmt, len(enc_name)))
+		encoded_names = [task.name.encode() for task in tasks]
 
-	for i, enc_name in enumerate(encoded_names): file.write(enc_name)
+		for enc_name in encoded_names:
+			file.write(struct.pack(tasklen_fmt, len(enc_name)))
 
-	for task, start, end in log:
-		file.write(struct.pack(logentry_fmt, task_map[task.name], int(start.timestamp()), int(end.timestamp())))
+		for enc_name in encoded_names: file.write(enc_name)
+
+		for task, start, end in log:
+			if task.name in task_map:
+				taskid = task_map[task.name]
+			else:
+				taskid = len(task_map)
+				task_map[task.name] = taskid
+
+			file.write(struct.pack(logentry_fmt, taskid, int(start.timestamp()), int(end.timestamp())))
+
+	except:
+		# Restore backup
+		file.seek(0)
+		file.write(log_backup)
+		file.truncate()
+		raise
 
 if __name__ == '__main__':
 	import Scheduler as shd
 	from temp_data import tasks, now
-
-	# with open('scheduler.log', 'wb') as f:
-	# 	write([shd.FREE]+tasks, [(shd.FREE, now, now)], f)
-	# print('Log file has been created.')
 
 	with open('scheduler.log', 'rb') as f:
 		log = read([shd.FREE]+tasks, f)
