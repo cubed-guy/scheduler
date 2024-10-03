@@ -6,6 +6,9 @@ import struct
 # taskid:  str
 # taskidx: int
 
+from typing import Any
+binary = Any
+
 taskidx_fmt  = '!I'
 tasklen_fmt  = '!B'
 logentry_fmt = f'{taskidx_fmt}II'  # taskidx, start, end
@@ -14,7 +17,7 @@ taskidx_size  = struct.calcsize(taskidx_fmt)
 tasklen_size  = struct.calcsize(tasklen_fmt)
 logentry_size = struct.calcsize(logentry_fmt)
 
-def dummy_task(name, colour):
+def dummy_task(name: str, colour) -> Task:
 	return Task(name, colour, Never())
 
 def read(tasks, file: 'binary', default_colour=(27, 27, 27)):

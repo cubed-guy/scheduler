@@ -153,7 +153,7 @@ selected_task = tasks[selected_task_id]
 ongoing_task = shd.FREE
 
 with open('scheduler.log', 'rb') as f:
-	log = logfile.read([shd.FREE]+tasks, f)
+	log = logfile.read((shd.FREE,)+tasks, f)
 log.append((ongoing_task, now, now))
 
 today = now
@@ -191,12 +191,12 @@ try:
 				elif event.key == K_s:
 					update_stat('Saving log file...')
 					with open('scheduler.log', 'r+b') as f:
-						logfile.write([shd.FREE]+tasks, log, f)
+						logfile.write((shd.FREE,)+tasks, log, f)
 				elif event.key == K_p:
 					for task in tasks:
-						nt = task.next_true(log)
+						nt = task.next_true(log, now)
 						if nt is shd.NEVER: continue
-						if nt is shd.NOW or nt <= now:
+						if nt <= now:
 							print(f'#{int.from_bytes(task.colour, "big"):06x} {task}')
 					print()
 
@@ -238,4 +238,4 @@ try:
 finally:
 	update_stat('Saving log file...')
 	with open('scheduler.log', 'r+b') as f:
-		logfile.write([shd.FREE]+tasks, log, f)
+		logfile.write((shd.FREE,)+tasks, log, f)
