@@ -143,7 +143,7 @@ def update_display():
 
 	if ongoing_task is scheduled[0][0]:
 		update_stat(
-			f'{ongoing_task} ongoing '
+			f'{now:[%H:%M:%S]} {ongoing_task} ongoing '
 			f'in priority till {scheduled[0][2]:%H:%M}, '
 			f'then {next_task} '
 			f'[{selected_task} selected]',
@@ -151,7 +151,7 @@ def update_display():
 		)
 	else:
 		update_stat(
-			f'{ongoing_task} ongoing, '
+			f'{now:[%H:%M:%S]} {ongoing_task} ongoing, '
 			f'{scheduled[0][0]} in priority till {scheduled[0][2]:%H:%M}, '
 			f'then {next_task} '
 			f'[{selected_task} selected]',
@@ -253,7 +253,9 @@ try:
 					zoom *= ZOOM_FAC ** event.y
 					zoom = min(max(zoom, MIN_ZOOM), MAX_ZOOM)
 				else:
-					dx, dy = from_screen_scale((event.x * 7, event.y * 7))
+					x, y = event.x, event.y
+					if mods & (KMOD_LSHIFT|KMOD_RSHIFT): x, y = y, x
+					dx, dy = from_screen_scale((x * 7, y * 7))
 					scroll[0] += dx
 					scroll[1] += dy
 			elif event.type == MOUSEBUTTONDOWN:
@@ -281,5 +283,6 @@ try:
 		# ticks += frame_time
 finally:
 	update_stat('Saving log file...')
+	print('Saving log file...')
 	with open('scheduler.log', 'r+b') as f:
 		logfile.write((shd.FREE,)+tasks, log, f)
