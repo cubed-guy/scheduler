@@ -1,5 +1,6 @@
 # Visualiser + Realtime logger for scheduler
 
+from __future__ import annotations
 from os import environ
 environ['PYGAME_HIDE_SUPPORT_PROMPT'] = 'true'
 
@@ -66,7 +67,7 @@ def to_screen_scale(dx, dy):
 	global zoom
 	return dx / zoom, dy  # no zoom on y
 
-def time_to_screen_space(t: dt, interval):
+def time_to_screen_space(t: dt, interval: td):
 	global scroll, zoom, origin
 
 	since_epoch = t-origin
@@ -113,25 +114,49 @@ def update_display():
 
 	# show timeline
 	for task, start, end in iter_chain(log, scheduled):
-		x_start, y_start = time_to_screen_space(start, interval)
 		x_end, y_end = time_to_screen_space(end, interval)
+
+		if isinstance(start, dt):
+			x_start, y_start = time_to_screen_space(start, interval)
 
 		# print(f'{x_start:.02f} {y_start:.02f}', f'{x_end:.02f} {y_end:.02f}', curr_task, scroll, zoom)
 		if y_start == y_end:
-			display.fill(task.colour, drect.clip((x_start, y_start, x_end-x_start+1, ROW_HEIGHT)))
+			if isinstance(start, dt):
+				display.fill(task.colour, drect.clip((x_start, y_start, x_end-x_start+1, ROW_HEIGHT)))
+			else:
+				display.fill(task.colour, drect.clip((x_end-ROW_PAD//4, y_end-ROW_PAD, ROW_PAD//2, ROW_PAD)))
 		else:
 			display.fill(task.colour, drect.clip((x_start, y_start, (record_start+record_width)-x_start, ROW_HEIGHT)))
 			display.fill(task.colour, drect.clip((w//2-scroll[0]/zoom, y_end, x_end-record_start+1, ROW_HEIGHT)))
 
-	cursor_pos = time_to_screen_space(now, interval)
-	cursor_rect = pygame.Rect(cursor_pos, (1, TOTAL_ROW_HEIGHT))
+	cursor_x, cursor_y = time_to_screen_space(now, interval)
+	cursor_y -= ROW_PAD
+	cursor_rect = pygame.Rect((cursor_x, cursor_y), (1, TOTAL_ROW_HEIGHT))
 	display.fill(c-0, drect.clip(cursor_rect.inflate(2, 0)))
 	display.fill(c@0xffffe0, drect.clip(cursor_rect))
 
 	# print()
 	# update_stat(f'{x_start:.02f} {y_start:.02f}', f'{x_end:.02f} {y_end:.02f}', update = False)
 	# update_stat(f'{record_start, record_width} {selected_task} selected ({scheduled[0][0]} in priority till {scheduled[0][2]:%H:%M})', update = False)
-	update_stat(f'{selected_task} selected ({ongoing_task} ongoing, {scheduled[0][0]} in priority till {scheduled[0][2]:%H:%M})', update = False)
+	next_task = None
+	if len(scheduled) >= 2: next_task = scheduled[1][0]
+
+	if ongoing_task is scheduled[0][0]:
+		update_stat(
+			f'{ongoing_task} ongoing '
+			f'in priority till {scheduled[0][2]:%H:%M}, '
+			f'then {next_task} '
+			f'[{selected_task} selected]',
+			update = False
+		)
+	else:
+		update_stat(
+			f'{ongoing_task} ongoing, '
+			f'{scheduled[0][0]} in priority till {scheduled[0][2]:%H:%M}, '
+			f'then {next_task} '
+			f'[{selected_task} selected]',
+			update = False
+		)
 	pygame.display.flip()
 
 
@@ -181,6 +206,16 @@ try:
 					selected_task_id += 1
 					selected_task_id %= len(tasks)
 					selected_task = tasks[selected_task_id]
+				elif event.key == K_p:
+					if not scheduled: continue
+
+					for i, task in enumerate(tasks):
+						if task is scheduled[0][0]: break
+					else: continue
+
+					selected_task_id = i
+					selected_task = task
+
 				elif event.key == K_SPACE:
 					log[-1] = *log[-1][:2], now
 					if ongoing_task is shd.FREE:
@@ -188,17 +223,25 @@ try:
 					else:
 						ongoing_task = shd.FREE
 					log.append((ongoing_task, now, now))
-				elif event.key == K_s:
-					update_stat('Saving log file...')
-					with open('scheduler.log', 'r+b') as f:
-						logfile.write((shd.FREE,)+tasks, log, f)
-				elif event.key == K_p:
+				elif event.key == K_d:
+					log[-1] = *log[-1][:2], now
+					log.append((selected_task, shd.DONE, now))
+					if ongoing_task is selected_task:
+						ongoing_task = shd.FREE
+					log.append((ongoing_task, now, now))
+
+				elif event.key == K_l:
 					for task in tasks:
 						nt = task.next_true(log, now)
 						if nt is shd.NEVER: continue
 						if nt <= now:
 							print(f'#{int.from_bytes(task.colour, "big"):06x} {task}')
 					print()
+
+				elif event.key == K_s:
+					update_stat('Saving log file...')
+					with open('scheduler.log', 'r+b') as f:
+						logfile.write((shd.FREE,)+tasks, log, f)
 
 			elif event.type == VIDEORESIZE:
 				resize(event.size, display.get_flags())
@@ -227,7 +270,8 @@ try:
 		log[-1] = (log[-1][0], log[-1][1], now)
 		if (
 			scheduled[0][0] is not ongoing_task and scheduled[0][1]+REFRESH_INTERVAL < now
-			or scheduled[0][2] < now
+			or log[-1][1] >= now
+			or scheduled[0][2] <= now
 		):
 			# print('rescheduling', now)
 			scheduled = shd.compute_schedule(tasks, log, now, limit, report_time = False)

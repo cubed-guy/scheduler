@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 from datetime import datetime as dt
-from Scheduler import Task, Never
+from Scheduler import Task, Never, DONE
 import struct
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+	from Scheduler import LogEntry
 
 # taskid != taskidx
 # taskid:  str
@@ -11,7 +17,7 @@ binary = Any
 
 taskidx_fmt  = '!I'
 tasklen_fmt  = '!B'
-logentry_fmt = f'{taskidx_fmt}II'  # taskidx, start, end
+logentry_fmt = f'{taskidx_fmt}iI'  # taskidx, start, end
 
 taskidx_size  = struct.calcsize(taskidx_fmt)
 tasklen_size  = struct.calcsize(tasklen_fmt)
@@ -20,7 +26,7 @@ logentry_size = struct.calcsize(logentry_fmt)
 def dummy_task(name: str, colour) -> Task:
 	return Task(name, colour, Never())
 
-def read(tasks, file: 'binary', default_colour=(27, 27, 27)):
+def read(tasks: tuple[Task, ...], file: 'binary', default_colour=(27, 27, 27)) -> list[LogEntry]:
 	task_map = {}  # using name as the unique identifier
 	for task in tasks:
 		if task.name in task_map:
@@ -35,7 +41,7 @@ def read(tasks, file: 'binary', default_colour=(27, 27, 27)):
 		for _ in range(ntasks)
 	]
 
-	tasks = []
+	log_tasks = []
 	for l in tasklens:
 		taskid = file.read(l).decode()
 		if taskid in task_map:
@@ -45,7 +51,7 @@ def read(tasks, file: 'binary', default_colour=(27, 27, 27)):
 			task_map[taskid] = task
 			# raise ValueError(f'{taskid!r} is not a defined task')
 
-		tasks.append(task)
+		log_tasks.append(task)
 
 	log = []
 
@@ -56,11 +62,15 @@ def read(tasks, file: 'binary', default_colour=(27, 27, 27)):
 			raise ValueError('Log file is corrupted. Found invalid size')
 
 		task_idx, start, end = struct.unpack(logentry_fmt, entry_code)
-		log.append((tasks[task_idx], dt.fromtimestamp(start), dt.fromtimestamp(end)))
+		if start < 0:
+			start = DONE
+		else:
+			start = dt.fromtimestamp(start)
+		log.append((log_tasks[task_idx], start, dt.fromtimestamp(end)))
 
 	return log
 
-def write(tasks, log, file: 'binary'):
+def write(tasks: tuple[Task, ...], log: list[LogEntry], file: 'binary') -> None:
 	task_map = {}  # using name as the unique identifier
 	for i, task in enumerate(tasks):
 		if task.name in task_map:
@@ -89,7 +99,12 @@ def write(tasks, log, file: 'binary'):
 				taskid = len(task_map)
 				task_map[task.name] = taskid
 
-			file.write(struct.pack(logentry_fmt, taskid, int(start.timestamp()), int(end.timestamp())))
+			if isinstance(start, dt):
+				start_time = int(start.timestamp())
+			else:
+				start_time = -1
+
+			file.write(struct.pack(logentry_fmt, taskid, start_time, int(end.timestamp())))
 
 	except:
 		# Restore backup
